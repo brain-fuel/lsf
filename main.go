@@ -4,7 +4,7 @@
 //
 // Keys: q quit · hjkl/arrows move · enter/l open · gg/G top/bottom ·
 // ctrl-d/u half page · ctrl-f/b page · zh or . toggle hidden · / search ·
-// n/N next/prev match · e edit · r reload.
+// n/N next/prev match · e edit · v view with rubric · r reload.
 package main
 
 import (
@@ -157,6 +157,8 @@ func (app *app) handleKey(ev *tcell.EventKey) {
 			}
 		case 'e':
 			app.editCurr()
+		case 'v':
+			app.viewCurr()
 		case '/':
 			app.mode = modeSearch
 			app.input = ""
@@ -218,8 +220,7 @@ func (app *app) openCurr() {
 	}
 }
 
-// editCurr suspends the screen and runs $EDITOR (fallback vi) on the file
-// under the cursor.
+// editCurr runs $EDITOR (fallback vi) on the file under the cursor.
 func (app *app) editCurr() {
 	f := app.nav.currDir().curr()
 	if f == nil || f.isDir() {
@@ -229,11 +230,31 @@ func (app *app) editCurr() {
 	if editor == "" {
 		editor = "vi"
 	}
+	app.runExternal(editor, f.path)
+	delete(app.previews, f.path)
+}
+
+// viewCurr views the file under the cursor read-only with rubric.
+func (app *app) viewCurr() {
+	f := app.nav.currDir().curr()
+	if f == nil || f.isDir() {
+		return
+	}
+	if _, err := exec.LookPath("rubric"); err != nil {
+		app.msg = "rubric not found in PATH (go install goforge.dev/rubric@latest)"
+		return
+	}
+	app.runExternal("rubric", f.path)
+}
+
+// runExternal suspends the screen, runs the command attached to the
+// terminal, and resumes.
+func (app *app) runExternal(name string, args ...string) {
 	if err := app.screen.Suspend(); err != nil {
 		app.msg = err.Error()
 		return
 	}
-	cmd := exec.Command(editor, f.path)
+	cmd := exec.Command(name, args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	err := cmd.Run()
 	if rerr := app.screen.Resume(); rerr != nil && err == nil {
@@ -242,5 +263,4 @@ func (app *app) editCurr() {
 	if err != nil {
 		app.msg = err.Error()
 	}
-	delete(app.previews, f.path)
 }

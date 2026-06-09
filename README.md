@@ -37,6 +37,7 @@ preview shows highlighted text for regular files, a listing for directories,
 | `zh`, `.` | toggle hidden files |
 | `/` | search (then `n`/`N` for next/previous match) |
 | `e` | open file in `$EDITOR` (fallback `vi`) |
+| `v` | view file with [rubric](https://goforge.dev/rubric) (paged, read-only) |
 | `r` | reload current directory and preview |
 
 ## Configuration
