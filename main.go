@@ -4,7 +4,8 @@
 //
 // Keys: q quit · hjkl/arrows move · enter/l open · gg/G top/bottom ·
 // ctrl-d/u half page · ctrl-f/b page · zh or . toggle hidden · / search ·
-// n/N next/prev match · e edit · v view with rubric · r reload.
+// n/N next/prev match · e edit (binaries: etch) · v view with rubric
+// (binaries: scry) · x hex peek in preview · r reload.
 package main
 
 import (
@@ -32,6 +33,7 @@ type app struct {
 	input    string // search prompt buffer
 	msg      string // transient status-line message
 	pending  rune   // first key of a g/z sequence
+	hexPath  string // file whose preview shows a hex dump (x key)
 	quit     bool
 }
 
@@ -153,12 +155,14 @@ func (app *app) handleKey(ev *tcell.EventKey) {
 		case 'r':
 			app.nav.reload()
 			if f := app.nav.currDir().curr(); f != nil {
-				delete(app.previews, f.path)
+				app.dropPreviews(f)
 			}
 		case 'e':
 			app.editCurr()
 		case 'v':
 			app.viewCurr()
+		case 'x':
+			app.toggleHexPeek()
 		case '/':
 			app.mode = modeSearch
 			app.input = ""
@@ -220,10 +224,16 @@ func (app *app) openCurr() {
 	}
 }
 
-// editCurr runs $EDITOR (fallback vi) on the file under the cursor.
+// editCurr edits the file under the cursor: $EDITOR (fallback vi) for text,
+// the hex editor for binaries.
 func (app *app) editCurr() {
 	f := app.nav.currDir().curr()
 	if f == nil || f.isDir() {
+		return
+	}
+	if app.isBinaryFile(f) {
+		app.runTool(hexEditor(), f.path)
+		app.dropPreviews(f)
 		return
 	}
 	editor := os.Getenv("EDITOR")
@@ -231,20 +241,83 @@ func (app *app) editCurr() {
 		editor = "vi"
 	}
 	app.runExternal(editor, f.path)
-	delete(app.previews, f.path)
+	app.dropPreviews(f)
 }
 
-// viewCurr views the file under the cursor read-only with rubric.
+// viewCurr views the file under the cursor read-only: rubric for text, the
+// hex viewer for binaries.
 func (app *app) viewCurr() {
 	f := app.nav.currDir().curr()
 	if f == nil || f.isDir() {
 		return
 	}
-	if _, err := exec.LookPath("rubric"); err != nil {
-		app.msg = "rubric not found in PATH (go install goforge.dev/rubric@latest)"
+	if app.isBinaryFile(f) {
+		app.runTool(hexViewer(), f.path)
 		return
 	}
-	app.runExternal("rubric", f.path)
+	app.runTool("rubric", f.path)
+}
+
+// toggleHexPeek switches the preview pane to/from a hex dump of the file
+// under the cursor. Moving to another file reverts to the normal preview.
+func (app *app) toggleHexPeek() {
+	f := app.nav.currDir().curr()
+	if f == nil || f.isDir() || !f.Mode().IsRegular() {
+		return
+	}
+	if app.hexPath == f.path {
+		app.hexPath = ""
+	} else {
+		app.hexPath = f.path
+	}
+}
+
+// isBinaryFile reports whether the (cached) preview classified f as binary.
+func (app *app) isBinaryFile(f *file) bool {
+	return f.Mode().IsRegular() && app.previewFile(f).binary
+}
+
+// hexEditor returns the hex editor command: $LSF_HEXEDITOR or etch.
+func hexEditor() string {
+	if c := os.Getenv("LSF_HEXEDITOR"); c != "" {
+		return c
+	}
+	return "etch"
+}
+
+// hexViewer returns the hex viewer command: $LSF_HEXVIEWER or scry.
+func hexViewer() string {
+	if c := os.Getenv("LSF_HEXVIEWER"); c != "" {
+		return c
+	}
+	return "scry"
+}
+
+// installHint maps a goforge.dev tool to its go install hint.
+var installHint = map[string]string{
+	"rubric": "go install goforge.dev/rubric@latest",
+	"etch":   "go install goforge.dev/etch/cmd/etch@latest",
+	"scry":   "go install goforge.dev/etch/cmd/scry@latest",
+}
+
+// runTool runs an external tool on a path if it is installed, otherwise
+// shows an install hint on the status line.
+func (app *app) runTool(name string, path string) {
+	if _, err := exec.LookPath(name); err != nil {
+		msg := name + " not found in PATH"
+		if hint, ok := installHint[name]; ok {
+			msg += " (" + hint + ")"
+		}
+		app.msg = msg
+		return
+	}
+	app.runExternal(name, path)
+}
+
+// dropPreviews invalidates the cached text and hex previews of f.
+func (app *app) dropPreviews(f *file) {
+	delete(app.previews, f.path)
+	delete(app.previews, f.path+"\x00hex")
 }
 
 // runExternal suspends the screen, runs the command attached to the

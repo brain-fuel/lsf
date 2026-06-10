@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,13 +16,22 @@ import (
 const (
 	// previewMaxBytes caps how much of a file is read for previewing.
 	previewMaxBytes = 512 * 1024
+	// previewSniffBytes is read first to decide binary vs text, so binaries
+	// (executables especially) bail out without reading previewMaxBytes.
+	previewSniffBytes = 4 * 1024
 	// previewMaxLines caps how many lines are highlighted and cached.
 	previewMaxLines = 500
-	tabWidth        = 4
-	defaultTheme    = "monokai"
+	// hexPeekBytes caps how much of a file the hex peek (x key) dumps:
+	// 16 bytes per row, previewMaxLines rows.
+	hexPeekBytes = 16 * previewMaxLines
+	tabWidth     = 4
+	defaultTheme = "monokai"
 )
 
-var gutterStyle = tcell.StyleDefault.Foreground(tcell.PaletteColor(238))
+var (
+	gutterStyle = tcell.StyleDefault.Foreground(tcell.PaletteColor(238))
+	asciiStyle  = tcell.StyleDefault.Foreground(tcell.PaletteColor(245))
+)
 
 type seg struct {
 	text  string
@@ -31,6 +41,7 @@ type seg struct {
 type preview struct {
 	lines   [][]seg
 	binary  bool
+	hex     bool // lines are a hex dump (offsets baked in, no gutter)
 	empty   bool
 	tooLong bool // file had more lines than previewMaxLines
 	err     error
@@ -60,22 +71,36 @@ func renderPreview(f *file) *preview {
 		return p
 	}
 	defer fh.Close()
-	buf := make([]byte, previewMaxBytes)
-	n, err := fh.Read(buf)
+	// Sniff a small head first: binaries (executables especially) are
+	// classified from it without paying for the full previewMaxBytes read.
+	head := make([]byte, previewSniffBytes)
+	n, err := io.ReadFull(fh, head)
 	if n == 0 {
-		if err != nil && err.Error() != "EOF" {
+		if err != io.EOF && err != io.ErrUnexpectedEOF && err != nil {
 			p.err = err
 		} else {
 			p.empty = true
 		}
 		return p
 	}
-	buf = buf[:n]
-	if isBinary(buf) {
+	head = head[:n]
+	if isBinary(head) {
 		p.binary = true
 		return p
 	}
+	buf := head
+	if n == previewSniffBytes {
+		rest := make([]byte, previewMaxBytes-previewSniffBytes)
+		m, _ := io.ReadFull(fh, rest)
+		buf = append(buf, rest[:m]...)
+	}
 	source := string(buf)
+	// Only previewMaxLines lines are kept, so cut the source there before
+	// tokenising instead of highlighting all previewMaxBytes of it.
+	if i := nthNewline(source, previewMaxLines); i >= 0 && i+1 < len(source) {
+		source = source[:i+1]
+		p.tooLong = true
+	}
 
 	lexer := lexers.Match(filepath.Base(f.path))
 	if lexer == nil {
@@ -100,7 +125,7 @@ func renderPreview(f *file) *preview {
 		// Highlighting failed; fall back to plain lines.
 		for _, l := range strings.SplitAfter(source, "\n") {
 			p.appendLine([]seg{{text: l, style: tcell.StyleDefault}})
-			if p.tooLong {
+			if len(p.lines) >= previewMaxLines {
 				break
 			}
 		}
@@ -112,7 +137,7 @@ func renderPreview(f *file) *preview {
 			segs = append(segs, seg{text: tok.Value, style: entryStyle(theme.Get(tok.Type))})
 		}
 		p.appendLine(segs)
-		if p.tooLong {
+		if len(p.lines) >= previewMaxLines {
 			break
 		}
 	}
@@ -125,6 +150,87 @@ func (p *preview) appendLine(segs []seg) {
 		return
 	}
 	p.lines = append(p.lines, segs)
+}
+
+// nthNewline returns the index of the n-th '\n' in s, or -1 if there are
+// fewer than n newlines.
+func nthNewline(s string, n int) int {
+	off := 0
+	for ; n > 0; n-- {
+		i := strings.IndexByte(s[off:], '\n')
+		if i < 0 {
+			return -1
+		}
+		off += i + 1
+	}
+	return off - 1
+}
+
+// hexPreviewFile returns a (possibly cached) hex dump preview of f, used by
+// the x key for any regular file (binary or not).
+func (app *app) hexPreviewFile(f *file) *preview {
+	key := f.path + "\x00hex"
+	if p, ok := app.previews[key]; ok &&
+		p.mtime == f.ModTime().UnixNano() && p.size == f.Size() {
+		return p
+	}
+	p := renderHexPreview(f)
+	p.mtime = f.ModTime().UnixNano()
+	p.size = f.Size()
+	app.previews[key] = p
+	return p
+}
+
+// renderHexPreview builds an xxd-style dump of the first hexPeekBytes of f:
+// offset column, 16 hex bytes split into two groups of 8, ASCII column.
+func renderHexPreview(f *file) *preview {
+	p := &preview{hex: true}
+	fh, err := os.Open(f.path)
+	if err != nil {
+		p.err = err
+		return p
+	}
+	defer fh.Close()
+	buf := make([]byte, hexPeekBytes)
+	n, _ := io.ReadFull(fh, buf)
+	if n == 0 {
+		p.empty = true
+		return p
+	}
+	buf = buf[:n]
+	if int64(n) < f.Size() {
+		p.tooLong = true
+	}
+	for off := 0; off < len(buf); off += 16 {
+		chunk := buf[off:min(off+16, len(buf))]
+		var hexCol strings.Builder
+		for i := 0; i < 16; i++ {
+			if i == 8 {
+				hexCol.WriteByte(' ')
+			}
+			if i < len(chunk) {
+				fmt.Fprintf(&hexCol, "%02x ", chunk[i])
+			} else {
+				hexCol.WriteString("   ")
+			}
+		}
+		var ascii strings.Builder
+		ascii.WriteByte('|')
+		for _, c := range chunk {
+			if c >= 0x20 && c < 0x7f {
+				ascii.WriteByte(c)
+			} else {
+				ascii.WriteByte('.')
+			}
+		}
+		ascii.WriteByte('|')
+		p.lines = append(p.lines, []seg{
+			{text: fmt.Sprintf("%08x  ", off), style: gutterStyle},
+			{text: hexCol.String(), style: tcell.StyleDefault},
+			{text: ascii.String(), style: asciiStyle},
+		})
+	}
+	return p
 }
 
 func themeName() string {
@@ -183,15 +289,31 @@ func (app *app) drawPreview(win rect) {
 		return
 	}
 	p := app.previewFile(f)
+	if app.hexPath == f.path {
+		p = app.hexPreviewFile(f)
+	}
 	switch {
 	case p.err != nil:
 		printLine(app.screen, win.x, win.y, win.w, p.err.Error(), errStyle)
 		return
 	case p.binary:
-		printLine(app.screen, win.x, win.y, win.w, "binary", msgStyle)
+		printLine(app.screen, win.x, win.y, win.w, "binary — x: hex peek · e: hex edit · v: hex view", msgStyle)
 		return
 	case p.empty:
 		printLine(app.screen, win.x, win.y, win.w, "empty", msgStyle)
+		return
+	}
+
+	if p.hex {
+		for row := 0; row < win.h && row < len(p.lines); row++ {
+			col := 0
+			for _, sg := range p.lines[row] {
+				col = drawSeg(app.screen, win.x+1, win.y+row, win.w-1, col, sg)
+				if col >= win.w-1 {
+					break
+				}
+			}
+		}
 		return
 	}
 

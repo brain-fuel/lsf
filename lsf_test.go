@@ -129,3 +129,67 @@ func TestDirBound(t *testing.T) {
 		t.Error("empty dir not reset")
 	}
 }
+
+func TestNthNewline(t *testing.T) {
+	s := "a\nb\nc\nd\n"
+	cases := []struct{ n, want int }{{1, 1}, {2, 3}, {4, 7}, {5, -1}}
+	for _, c := range cases {
+		if got := nthNewline(s, c.n); got != c.want {
+			t.Errorf("nthNewline(%d) = %d, want %d", c.n, got, c.want)
+		}
+	}
+	if got := nthNewline("no newline", 1); got != -1 {
+		t.Errorf("nthNewline on newline-free string = %d, want -1", got)
+	}
+}
+
+func TestRenderPreviewTruncatesLongFiles(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "long")
+	var src []byte
+	for i := 0; i < previewMaxLines*2; i++ {
+		src = append(src, "some text on a line\n"...)
+	}
+	if err := os.WriteFile(path, src, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	info, _ := os.Lstat(path)
+	p := renderPreview(&file{FileInfo: info, path: path})
+	if p.err != nil || p.binary {
+		t.Fatalf("unexpected preview state: %+v", p)
+	}
+	if len(p.lines) != previewMaxLines {
+		t.Fatalf("got %d lines, want %d", len(p.lines), previewMaxLines)
+	}
+	if !p.tooLong {
+		t.Error("tooLong not set for truncated file")
+	}
+}
+
+func TestRenderHexPreview(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "blob")
+	data := []byte{0x7f, 'E', 'L', 'F', 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 'h', 'i'}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	info, _ := os.Lstat(path)
+	p := renderHexPreview(&file{FileInfo: info, path: path})
+	if p.err != nil || !p.hex {
+		t.Fatalf("unexpected hex preview state: %+v", p)
+	}
+	if len(p.lines) != 2 {
+		t.Fatalf("got %d hex rows, want 2", len(p.lines))
+	}
+	row0 := p.lines[0][0].text + p.lines[0][1].text + p.lines[0][2].text
+	if row0 != "00000000  7f 45 4c 46 00 00 00 00  01 02 03 04 05 06 07 08 |.ELF............|" {
+		t.Errorf("row0 = %q", row0)
+	}
+	row1 := p.lines[1][0].text + p.lines[1][1].text + p.lines[1][2].text
+	if row1 != "00000010  68 69                                            |hi|" {
+		t.Errorf("row1 = %q", row1)
+	}
+	if p.tooLong {
+		t.Error("tooLong set though whole file was dumped")
+	}
+}
