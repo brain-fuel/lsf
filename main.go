@@ -252,10 +252,17 @@ func (app *app) viewCurr() {
 		return
 	}
 	if app.isBinaryFile(f) {
-		app.runTool(hexViewer(), f.path)
+		// --paging always so a one-screen dump doesn't flash and
+		// vanish when less quits via -F. Only the known default gets
+		// flags; a custom $LSF_HEXVIEWER may not understand them.
+		if v := hexViewer(); v == "scry" {
+			app.runTool(v, "--paging", "always", f.path)
+		} else {
+			app.runTool(v, f.path)
+		}
 		return
 	}
-	app.runTool("rubric", f.path)
+	app.runTool("rubric", "--paging=always", f.path)
 }
 
 // toggleHexPeek switches the preview pane to/from a hex dump of the file
@@ -300,9 +307,9 @@ var installHint = map[string]string{
 	"scry":   "go install goforge.dev/etch/cmd/scry@latest",
 }
 
-// runTool runs an external tool on a path if it is installed, otherwise
-// shows an install hint on the status line.
-func (app *app) runTool(name string, path string) {
+// runTool runs an external tool if it is installed, otherwise shows an
+// install hint on the status line.
+func (app *app) runTool(name string, args ...string) {
 	if _, err := exec.LookPath(name); err != nil {
 		msg := name + " not found in PATH"
 		if hint, ok := installHint[name]; ok {
@@ -311,7 +318,7 @@ func (app *app) runTool(name string, path string) {
 		app.msg = msg
 		return
 	}
-	app.runExternal(name, path)
+	app.runExternal(name, args...)
 }
 
 // dropPreviews invalidates the cached text and hex previews of f.
