@@ -41,6 +41,10 @@ preview shows highlighted text for regular files, a listing for directories,
 | `x` | toggle hex peek: preview pane shows an `xxd`-style dump of the file under the cursor |
 | `r` | reload current directory and preview |
 
+The mouse works as in lf: the wheel moves the cursor, left click selects
+the clicked entry (entering the clicked pane's directory), middle click
+opens it.
+
 ## Configuration
 
 - `LSF_THEME` — chroma theme name for previews (default `monokai`).

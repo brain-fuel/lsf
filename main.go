@@ -6,6 +6,9 @@
 // ctrl-d/u half page · ctrl-f/b page · zh or . toggle hidden · / search ·
 // n/N next/prev match · e edit (binaries: etch) · v view with rubric
 // (binaries: scry) · x hex peek in preview · r reload.
+//
+// Mouse (lf's defaults): wheel moves the cursor, left click selects the
+// clicked entry, middle click opens it.
 package main
 
 import (
@@ -51,7 +54,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	screen, err := tcell.NewScreen()
+	// Force legacy keyboard reporting, the only protocol lf's tcell v2 ever
+	// uses. tcell v3 otherwise negotiates kitty/win32-input keyboard
+	// protocols, which several terminals implement badly enough that one
+	// keypress arrives as two events (set TCELL_KEYBOARD_PROTOCOL=auto to
+	// re-enable negotiation).
+	screen, err := tcell.NewScreen(tcell.OptKeyboardProtocol(tcell.LegacyKeyboard))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "lsf:", err)
 		os.Exit(1)
@@ -61,6 +69,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer screen.Fini()
+	screen.EnableMouse(tcell.MouseButtonEvents)
 
 	app := &app{
 		screen:   screen,
@@ -87,6 +96,12 @@ func (app *app) loop() {
 			} else {
 				app.handleKey(ev)
 			}
+		case *tcell.EventMouse:
+			if app.mode != modeNormal {
+				continue
+			}
+			app.msg = ""
+			app.handleMouse(ev)
 		default:
 			continue
 		}
@@ -171,6 +186,78 @@ func (app *app) handleKey(ev *tcell.EventKey) {
 		case 'N':
 			app.findMatch(true)
 		}
+	}
+}
+
+// handleMouse implements lf's default mouse bindings: wheel moves the
+// cursor, left click selects the row under the pointer (entering the
+// clicked pane's directory if needed), middle click opens it.
+func (app *app) handleMouse(ev *tcell.EventMouse) {
+	w, h := app.screen.Size()
+	paneH := max(1, h-2)
+
+	btn := ev.Buttons()
+	switch {
+	case btn&tcell.WheelUp != 0:
+		app.nav.up(1)
+		return
+	case btn&tcell.WheelDown != 0:
+		app.nav.down(1)
+		return
+	}
+	open := btn&tcell.Button2 != 0
+	if btn&tcell.Button1 == 0 && !open {
+		return
+	}
+
+	x, y := ev.Position()
+	row := y - 1 // pane rows start under the prompt line
+	if row < 0 || row >= paneH {
+		return
+	}
+	ws, xs := columnWidths(w)
+	pane := -1
+	for i := range xs {
+		if x >= xs[i] && x < xs[i]+ws[i] {
+			pane = i
+		}
+	}
+
+	var d *dir
+	switch pane {
+	case 0:
+		d = app.nav.parentDir()
+	case 1:
+		d = app.nav.currDir()
+	case 2:
+		// The preview pane is the listing of the directory under the
+		// cursor; clicks on a file preview only mean "open" (lf's m-2).
+		f := app.nav.currDir().curr()
+		if f == nil {
+			return
+		}
+		if !f.isDir() {
+			if open {
+				app.openCurr()
+			}
+			return
+		}
+		d = app.nav.dir(f.path)
+		d.off = 0 // drawDirPreview always renders from the top
+	}
+	if d == nil || d.err != nil {
+		return
+	}
+	i := d.off + row
+	if i >= len(d.files) {
+		return
+	}
+
+	// Select the clicked entry, entering the clicked pane's directory.
+	app.nav.path = d.path
+	d.ind = i
+	if open {
+		app.openCurr()
 	}
 }
 
