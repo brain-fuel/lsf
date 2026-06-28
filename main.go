@@ -13,9 +13,11 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 
 	"github.com/gdamore/tcell/v3"
 )
@@ -40,20 +42,44 @@ type app struct {
 	quit     bool
 }
 
+// version is stamped by release builds. Go-installed binaries fall back to the
+// module version recorded in build info.
+var version = "dev"
+
 func main() {
-	path, err := os.Getwd()
-	if len(os.Args) > 1 {
-		path, err = filepath.Abs(os.Args[1])
-	}
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "lsf:", err)
-		os.Exit(1)
-	}
-	if info, err := os.Stat(path); err != nil || !info.IsDir() {
-		fmt.Fprintln(os.Stderr, "lsf: not a directory:", path)
-		os.Exit(1)
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+func run(args []string, stdout, stderr io.Writer) int {
+	switch {
+	case len(args) == 1 && (args[0] == "help" || args[0] == "-h" || args[0] == "--help"):
+		usage(stdout)
+		return 0
+	case len(args) == 1 && (args[0] == "version" || args[0] == "-v" || args[0] == "--version"):
+		fmt.Fprintf(stdout, "lsf %s\n", resolvedVersion())
+		return 0
+	case len(args) > 1:
+		fmt.Fprintln(stderr, "lsf: expected at most one directory")
+		usage(stderr)
+		return 2
 	}
 
+	path, err := os.Getwd()
+	if len(args) == 1 {
+		path, err = filepath.Abs(args[0])
+	}
+	if err != nil {
+		fmt.Fprintln(stderr, "lsf:", err)
+		return 1
+	}
+	if info, err := os.Stat(path); err != nil || !info.IsDir() {
+		fmt.Fprintln(stderr, "lsf: not a directory:", path)
+		return 1
+	}
+	return launch(path, stderr)
+}
+
+func launch(path string, stderr io.Writer) int {
 	// Force legacy keyboard reporting, the only protocol lf's tcell v2 ever
 	// uses. tcell v3 otherwise negotiates kitty/win32-input keyboard
 	// protocols, which several terminals implement badly enough that one
@@ -61,12 +87,12 @@ func main() {
 	// re-enable negotiation).
 	screen, err := tcell.NewScreen(tcell.OptKeyboardProtocol(tcell.LegacyKeyboard))
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "lsf:", err)
-		os.Exit(1)
+		fmt.Fprintln(stderr, "lsf:", err)
+		return 1
 	}
 	if err := screen.Init(); err != nil {
-		fmt.Fprintln(os.Stderr, "lsf:", err)
-		os.Exit(1)
+		fmt.Fprintln(stderr, "lsf:", err)
+		return 1
 	}
 	defer screen.Fini()
 	screen.EnableMouse(tcell.MouseButtonEvents)
@@ -78,6 +104,31 @@ func main() {
 		userHost: userAtHost(),
 	}
 	app.loop()
+	return 0
+}
+
+func usage(w io.Writer) {
+	fmt.Fprintln(w, `usage: lsf [directory]
+
+A minimal lf-style terminal file manager with highlighted previews.
+
+Keys:
+  q/esc quit · hjkl/arrows move · enter/l open · e edit · v view
+  gg/G top/bottom · ctrl-d/u half page · / search · x hex peek · r reload
+
+Options:
+  -h, --help       print this help
+  -v, --version    print the lsf version`)
+}
+
+func resolvedVersion() string {
+	if version != "dev" {
+		return version
+	}
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		return bi.Main.Version
+	}
+	return version
 }
 
 func (app *app) loop() {

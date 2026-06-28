@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +12,39 @@ import (
 	"github.com/gdamore/tcell/v3"
 	"github.com/gdamore/tcell/v3/vt"
 )
+
+func TestRunHelpAndVersionDoNotStartTUI(t *testing.T) {
+	for _, arg := range []string{"help", "-h", "--help"} {
+		var stdout, stderr bytes.Buffer
+		if code := run([]string{arg}, &stdout, &stderr); code != 0 {
+			t.Fatalf("%s exit code = %d, stderr: %s", arg, code, stderr.String())
+		}
+		if !strings.Contains(stdout.String(), "usage: lsf [directory]") {
+			t.Fatalf("%s help output = %q", arg, stdout.String())
+		}
+	}
+
+	for _, arg := range []string{"version", "-v", "--version"} {
+		var stdout, stderr bytes.Buffer
+		if code := run([]string{arg}, &stdout, &stderr); code != 0 {
+			t.Fatalf("%s exit code = %d, stderr: %s", arg, code, stderr.String())
+		}
+		if !strings.HasPrefix(stdout.String(), "lsf ") {
+			t.Fatalf("%s version output = %q", arg, stdout.String())
+		}
+	}
+}
+
+func TestRunRejectsTooManyDirectories(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"one", "two"}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "expected at most one directory") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
 
 func TestNaturalLess(t *testing.T) {
 	cases := []struct {
