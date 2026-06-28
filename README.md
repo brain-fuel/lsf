@@ -29,17 +29,22 @@ preview shows highlighted text for regular files, a listing for directories,
 |-----|--------|
 | `q`, `esc` | quit |
 | `j`/`k`, arrows | move down/up |
+| `ctrl-e` / `ctrl-y` | scroll file-list viewport down/up one row |
 | `h`, left | parent directory |
 | `l`, right, `enter` | enter directory / edit file (binaries: hex edit with [etch](https://goforge.dev/etch)) |
-| `gg` / `G` | first / last entry |
+| `gg` / `G`, home/end | first / last entry |
+| `H` / `M` / `L` | move to high/middle/low visible row |
 | `ctrl-d` / `ctrl-u` | half page down / up |
-| `ctrl-f` / `ctrl-b` | page down / up |
+| `ctrl-f` / `ctrl-b`, page down/up | page down / up |
 | `zh`, `.` | toggle hidden files |
 | `/` | search (then `n`/`N` for next/previous match) |
 | `e` | open file in `$EDITOR` (fallback `vi`); binaries open in [etch](https://goforge.dev/etch) |
 | `v` | view file with [rubric](https://goforge.dev/rubric) (paged, read-only); binaries with [scry](https://goforge.dev/etch) |
 | `x` | toggle hex peek: preview pane shows an `xxd`-style dump of the file under the cursor |
 | `r` | reload current directory and preview |
+
+Navigation commands accept numeric prefixes, e.g. `5j` moves down five rows
+and `3G` moves to the third row.
 
 The mouse works as in lf: the wheel moves the cursor, left click selects
 the clicked entry (entering the clicked pane's directory), middle click

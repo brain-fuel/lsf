@@ -35,7 +35,7 @@ type app struct {
 	mode     mode
 	input    string // search prompt buffer
 	msg      string // transient status-line message
-	pending  rune   // first key of a g/z sequence
+	keys     keyResolver
 	hexPath  string // file whose preview shows a hex dump (x key)
 	quit     bool
 }
@@ -113,77 +113,94 @@ func (app *app) loop() {
 }
 
 func (app *app) handleKey(ev *tcell.EventKey) {
-	_, h := app.screen.Size()
-	paneH := max(1, h-2)
-
-	r := keyRune(ev)
-
-	if app.pending != 0 {
-		pending := app.pending
-		app.pending = 0
-		switch {
-		case pending == 'g' && r == 'g':
-			app.nav.top()
-		case pending == 'z' && r == 'h':
-			app.nav.toggleHidden()
-		}
+	key := readKey(ev)
+	if key == "" {
 		return
 	}
+	action, ok := app.keys.accept(key, normalBindings)
+	if !ok {
+		return
+	}
+	app.runCommand(action.command, action.count)
+}
 
-	switch ev.Key() {
-	case tcell.KeyEscape, tcell.KeyCtrlC:
+func (app *app) paneHeight() int {
+	if app.screen == nil {
+		return 1
+	}
+	_, h := app.screen.Size()
+	return max(1, h-2)
+}
+
+func (app *app) runCommand(command string, count int) {
+	if count < 1 {
+		count = 1
+	}
+
+	paneH := app.paneHeight()
+	switch command {
+	case "quit":
 		app.quit = true
-	case tcell.KeyUp:
-		app.nav.up(1)
-	case tcell.KeyDown:
-		app.nav.down(1)
-	case tcell.KeyLeft:
+	case "up":
+		app.nav.up(count)
+	case "down":
+		app.nav.down(count)
+	case "updir":
 		app.nav.updir()
-	case tcell.KeyRight, tcell.KeyEnter:
+	case "open":
 		app.openCurr()
-	case tcell.KeyCtrlU:
-		app.nav.up(paneH / 2)
-	case tcell.KeyCtrlD:
-		app.nav.down(paneH / 2)
-	case tcell.KeyCtrlB:
-		app.nav.up(paneH)
-	case tcell.KeyCtrlF:
-		app.nav.down(paneH)
-	case tcell.KeyRune:
-		switch r {
-		case 'q':
-			app.quit = true
-		case 'k':
-			app.nav.up(1)
-		case 'j':
-			app.nav.down(1)
-		case 'h':
-			app.nav.updir()
-		case 'l':
-			app.openCurr()
-		case 'g', 'z':
-			app.pending = r
-		case 'G':
+	case "top":
+		if count == 1 {
+			app.nav.top()
+		} else {
+			app.nav.move(count - 1)
+		}
+	case "bottom":
+		if count == 1 {
 			app.nav.bottom()
-		case '.':
-			app.nav.toggleHidden()
-		case 'r':
-			app.nav.reload()
-			if f := app.nav.currDir().curr(); f != nil {
-				app.dropPreviews(f)
-			}
-		case 'e':
-			app.editCurr()
-		case 'v':
-			app.viewCurr()
-		case 'x':
-			app.toggleHexPeek()
-		case '/':
-			app.mode = modeSearch
-			app.input = ""
-		case 'n':
+		} else {
+			app.nav.move(count - 1)
+		}
+	case "high":
+		app.nav.high(paneH)
+	case "middle":
+		app.nav.middle(paneH)
+	case "low":
+		app.nav.low(paneH)
+	case "half-up":
+		app.nav.up(count * max(1, paneH/2))
+	case "half-down":
+		app.nav.down(count * max(1, paneH/2))
+	case "page-up":
+		app.nav.up(count * paneH)
+	case "page-down":
+		app.nav.down(count * paneH)
+	case "scroll-up":
+		app.nav.scrollUp(count, paneH)
+	case "scroll-down":
+		app.nav.scrollDown(count, paneH)
+	case "toggle-hidden":
+		app.nav.toggleHidden()
+	case "reload":
+		app.nav.reload()
+		if f := app.nav.currDir().curr(); f != nil {
+			app.dropPreviews(f)
+		}
+	case "edit":
+		app.editCurr()
+	case "view":
+		app.viewCurr()
+	case "hex-peek":
+		app.toggleHexPeek()
+	case "search":
+		app.mode = modeSearch
+		app.input = ""
+	case "search-next":
+		for range count {
 			app.findMatch(false)
-		case 'N':
+		}
+	case "search-prev":
+		for range count {
 			app.findMatch(true)
 		}
 	}

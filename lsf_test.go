@@ -1,11 +1,15 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/gdamore/tcell/v3"
+	"github.com/gdamore/tcell/v3/vt"
 )
 
 func TestNaturalLess(t *testing.T) {
@@ -90,10 +94,7 @@ func TestRenderPreviewEmpty(t *testing.T) {
 }
 
 func TestDirBound(t *testing.T) {
-	d := &dir{}
-	for i := 0; i < 100; i++ {
-		d.files = append(d.files, &file{})
-	}
+	d := testDir(100)
 	h := 10
 
 	d.ind = 0
@@ -111,8 +112,11 @@ func TestDirBound(t *testing.T) {
 		t.Errorf("cursor outside window: ind=%d off=%d h=%d", d.ind, d.off, h)
 	}
 
-	d.ind = 50
+	d.ind, d.off = 50, 0
 	d.bound(h)
+	if d.off != 41 {
+		t.Errorf("middle: off = %d, want 41", d.off)
+	}
 	if d.ind < d.off+scrolloff || d.ind > d.off+h-1-scrolloff {
 		t.Errorf("scrolloff violated: ind=%d off=%d", d.ind, d.off)
 	}
@@ -127,6 +131,292 @@ func TestDirBound(t *testing.T) {
 	empty.bound(h)
 	if empty.ind != 0 || empty.off != 0 {
 		t.Error("empty dir not reset")
+	}
+}
+
+func TestNavScrollCommands(t *testing.T) {
+	n := testNav(100)
+	d := n.currDir()
+	h := 10
+
+	d.ind = 50
+	d.bound(h)
+	if d.off != 41 {
+		t.Fatalf("setup off = %d, want 41", d.off)
+	}
+
+	n.scrollUp(1, h)
+	if d.ind != 49 || d.off != 40 {
+		t.Fatalf("scrollUp at bottom row: ind=%d off=%d, want ind=49 off=40", d.ind, d.off)
+	}
+
+	d.ind, d.off = 50, 45
+	n.scrollUp(1, h)
+	if d.ind != 50 || d.off != 44 {
+		t.Fatalf("scrollUp with cursor room: ind=%d off=%d, want ind=50 off=44", d.ind, d.off)
+	}
+
+	d.ind, d.off = 5, 0
+	n.scrollUp(1, h)
+	if d.ind != 4 || d.off != 0 {
+		t.Fatalf("scrollUp at top: ind=%d off=%d, want ind=4 off=0", d.ind, d.off)
+	}
+
+	d.ind, d.off = 50, 45
+	n.scrollDown(1, h)
+	if d.ind != 50 || d.off != 46 {
+		t.Fatalf("scrollDown with cursor room: ind=%d off=%d, want ind=50 off=46", d.ind, d.off)
+	}
+
+	d.ind, d.off = 50, 50
+	n.scrollDown(1, h)
+	if d.ind != 51 || d.off != 51 {
+		t.Fatalf("scrollDown at top row: ind=%d off=%d, want ind=51 off=51", d.ind, d.off)
+	}
+
+	d.ind, d.off = 95, 90
+	n.scrollDown(1, h)
+	if d.ind != 96 || d.off != 90 {
+		t.Fatalf("scrollDown at bottom: ind=%d off=%d, want ind=96 off=90", d.ind, d.off)
+	}
+}
+
+func TestNavScreenPositionCommands(t *testing.T) {
+	n := testNav(100)
+	d := n.currDir()
+	h := 10
+
+	d.ind = 50
+	d.bound(h)
+
+	n.high(h)
+	if d.ind != 41 {
+		t.Fatalf("high: ind=%d, want 41", d.ind)
+	}
+	n.middle(h)
+	if d.ind != 46 {
+		t.Fatalf("middle: ind=%d, want 46", d.ind)
+	}
+	n.low(h)
+	if d.ind != 50 {
+		t.Fatalf("low: ind=%d, want 50", d.ind)
+	}
+}
+
+func TestKeyResolverCountsAndMultiKeyBindings(t *testing.T) {
+	var resolver keyResolver
+
+	if action, ok := resolver.accept("5", normalBindings); ok || action.command != "" {
+		t.Fatalf("count prefix resolved early: action=%+v ok=%v", action, ok)
+	}
+	action, ok := resolver.accept("j", normalBindings)
+	if !ok || action.command != "down" || action.count != 5 {
+		t.Fatalf("5j resolved to action=%+v ok=%v, want down count 5", action, ok)
+	}
+
+	action, ok = resolver.accept("g", normalBindings)
+	if ok || action.command != "" {
+		t.Fatalf("g prefix resolved early: action=%+v ok=%v", action, ok)
+	}
+	action, ok = resolver.accept("g", normalBindings)
+	if !ok || action.command != "top" || action.count != 1 {
+		t.Fatalf("gg resolved to action=%+v ok=%v, want top count 1", action, ok)
+	}
+
+	if action, ok = resolver.accept("3", normalBindings); ok || action.command != "" {
+		t.Fatalf("count prefix resolved early: action=%+v ok=%v", action, ok)
+	}
+	action, ok = resolver.accept("G", normalBindings)
+	if !ok || action.command != "bottom" || action.count != 3 {
+		t.Fatalf("3G resolved to action=%+v ok=%v, want bottom count 3", action, ok)
+	}
+
+	if _, ok = resolver.accept("g", normalBindings); ok {
+		t.Fatal("g prefix resolved early")
+	}
+	if action, ok = resolver.accept("<esc>", normalBindings); ok || action.command != "" {
+		t.Fatalf("escape while pending resolved action=%+v ok=%v", action, ok)
+	}
+	action, ok = resolver.accept("g", normalBindings)
+	if ok || action.command != "" {
+		t.Fatalf("g after escape resolved early: action=%+v ok=%v", action, ok)
+	}
+	action, ok = resolver.accept("g", normalBindings)
+	if !ok || action.command != "top" {
+		t.Fatalf("gg after escape resolved to action=%+v ok=%v, want top", action, ok)
+	}
+}
+
+func TestRunCommandHonorsCounts(t *testing.T) {
+	app := &app{nav: testNav(100)}
+	d := app.nav.currDir()
+
+	app.runCommand("down", 5)
+	if d.ind != 5 {
+		t.Fatalf("down count: ind=%d, want 5", d.ind)
+	}
+	app.runCommand("up", 2)
+	if d.ind != 3 {
+		t.Fatalf("up count: ind=%d, want 3", d.ind)
+	}
+	app.runCommand("bottom", 3)
+	if d.ind != 2 {
+		t.Fatalf("3G/bottom count: ind=%d, want 2", d.ind)
+	}
+	app.runCommand("top", 4)
+	if d.ind != 3 {
+		t.Fatalf("4gg/top count: ind=%d, want 3", d.ind)
+	}
+}
+
+func TestTerminalNavigationKeypressesDoNotDoubleFire(t *testing.T) {
+	const (
+		width     = 80
+		height    = 12
+		fileCount = 20
+		ctrlE     = "\x05"
+		ctrlY     = "\x19"
+	)
+
+	dir := t.TempDir()
+	for index := 0; index < fileCount; index++ {
+		name := fmt.Sprintf("%02d.txt", index)
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(name+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	term := vt.NewMockTerm(vt.MockOptSize{X: width, Y: height})
+	screen, err := tcell.NewTerminfoScreenFromTty(term,
+		tcell.OptKeyboardProtocol(tcell.LegacyKeyboard),
+		tcell.OptNegotiation(false),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := screen.Init(); err != nil {
+		t.Fatal(err)
+	}
+	screen.EnableMouse(tcell.MouseButtonEvents)
+
+	testApp := &app{
+		screen:   screen,
+		nav:      newNav(dir),
+		previews: make(map[string]*preview),
+		userHost: "test@host",
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		testApp.loop()
+	}()
+	t.Cleanup(func() {
+		term.SendRaw([]byte("q"))
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Log("lsf terminal test loop did not stop before cleanup")
+		}
+		screen.Fini()
+		if err := term.Close(); err != nil {
+			t.Logf("mock terminal close failed: %v", err)
+		}
+	})
+
+	waitForStatus(t, term, width, height, "1/20")
+
+	term.SendRaw([]byte("j"))
+	waitForStatus(t, term, width, height, "2/20")
+
+	term.SendRaw([]byte("k"))
+	waitForStatus(t, term, width, height, "1/20")
+
+	term.SendRaw([]byte(ctrlE))
+	waitForStatus(t, term, width, height, "2/20")
+
+	term.SendRaw([]byte(ctrlY))
+	waitForStatus(t, term, width, height, "2/20")
+
+	term.SendRaw([]byte("gg"))
+	waitForStatus(t, term, width, height, "1/20")
+
+	term.SendRaw([]byte("5j"))
+	waitForStatus(t, term, width, height, "6/20")
+
+	term.SendRaw([]byte("gg"))
+	waitForStatus(t, term, width, height, "1/20")
+
+	term.SendRaw([]byte("3G"))
+	waitForStatus(t, term, width, height, "3/20")
+
+	term.SendRaw([]byte("G"))
+	waitForStatus(t, term, width, height, "20/20")
+
+	term.SendRaw([]byte(ctrlY))
+	waitForStatus(t, term, width, height, "19/20")
+
+	term.SendRaw([]byte("q"))
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("lsf did not quit after q")
+	}
+}
+
+func waitForStatus(t *testing.T, term vt.MockTerm, width, height int, want string) {
+	t.Helper()
+
+	var got string
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if err := term.Drain(); err != nil {
+			t.Fatal(err)
+		}
+		got = strings.TrimSpace(terminalLine(term, width, height-1))
+		if strings.HasSuffix(got, want) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("status line = %q, want suffix %q\nterminal:\n%s", got, want, terminalText(term, width, height))
+}
+
+func terminalText(term vt.MockTerm, width, height int) string {
+	var lines []string
+	for row := 0; row < height; row++ {
+		lines = append(lines, strings.TrimRight(terminalLine(term, width, row), " "))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func terminalLine(term vt.MockTerm, width, row int) string {
+	var line strings.Builder
+	for col := 0; col < width; col++ {
+		cell := term.GetCell(vt.Coord{X: vt.Col(col), Y: vt.Row(row)})
+		if cell.C == "" {
+			line.WriteByte(' ')
+			continue
+		}
+		line.WriteString(cell.C)
+	}
+	return line.String()
+}
+
+func testDir(n int) *dir {
+	d := &dir{}
+	for i := 0; i < n; i++ {
+		d.files = append(d.files, &file{})
+	}
+	return d
+}
+
+func testNav(fileCount int) *nav {
+	path := "/test"
+	return &nav{
+		dirs: map[string]*dir{
+			path: testDir(fileCount),
+		},
+		path: path,
 	}
 }
 

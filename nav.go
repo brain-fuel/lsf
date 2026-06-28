@@ -8,7 +8,9 @@ import (
 )
 
 // scrolloff is the number of rows kept visible above/below the cursor.
-const scrolloff = 2
+// Match lf's default; non-zero scrolloff should become a configurable option
+// when lsf grows lf-style settings.
+const scrolloff = 0
 
 type file struct {
 	os.FileInfo
@@ -154,10 +156,68 @@ func (n *nav) parentDir() *dir {
 	return d
 }
 
-func (n *nav) up(dist int)   { n.currDir().ind -= dist }
-func (n *nav) down(dist int) { n.currDir().ind += dist }
-func (n *nav) top()          { n.currDir().ind = 0 }
-func (n *nav) bottom()       { n.currDir().ind = len(n.currDir().files) - 1 }
+func (n *nav) up(dist int)    { n.currDir().ind -= dist }
+func (n *nav) down(dist int)  { n.currDir().ind += dist }
+func (n *nav) top()           { n.currDir().ind = 0 }
+func (n *nav) bottom()        { n.currDir().ind = len(n.currDir().files) - 1 }
+func (n *nav) move(index int) { n.currDir().ind = index }
+
+func (n *nav) scrollUp(dist, h int) {
+	d := n.currDir()
+	d.bound(h)
+	for ; dist > 0; dist-- {
+		switch {
+		case d.off > 0:
+			d.off--
+			if d.ind >= d.off+h {
+				d.ind = d.off + h - 1
+			}
+		case d.ind > 0:
+			d.ind--
+		}
+	}
+}
+
+func (n *nav) scrollDown(dist, h int) {
+	d := n.currDir()
+	d.bound(h)
+	maxOff := max(0, len(d.files)-h)
+	for ; dist > 0; dist-- {
+		switch {
+		case d.off < maxOff:
+			d.off++
+			if d.ind < d.off {
+				d.ind = d.off
+			}
+		case d.ind < len(d.files)-1:
+			d.ind++
+		}
+	}
+}
+
+func (n *nav) high(h int) {
+	d := n.currDir()
+	d.bound(h)
+	d.ind = d.off
+}
+
+func (n *nav) middle(h int) {
+	d := n.currDir()
+	d.bound(h)
+	end := min(d.off+h, len(d.files))
+	if end > d.off {
+		d.ind = d.off + (end-d.off)/2
+	}
+}
+
+func (n *nav) low(h int) {
+	d := n.currDir()
+	d.bound(h)
+	end := min(d.off+h, len(d.files))
+	if end > d.off {
+		d.ind = end - 1
+	}
+}
 
 func (n *nav) updir() {
 	parent := filepath.Dir(n.path)
