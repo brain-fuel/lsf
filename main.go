@@ -84,8 +84,13 @@ func launch(path string, stderr io.Writer) int {
 	// uses. tcell v3 otherwise negotiates kitty/win32-input keyboard
 	// protocols, which several terminals implement badly enough that one
 	// keypress arrives as two events (set TCELL_KEYBOARD_PROTOCOL=auto to
-	// re-enable negotiation).
-	screen, err := tcell.NewScreen(tcell.OptKeyboardProtocol(tcell.LegacyKeyboard))
+	// re-enable negotiation). Keep advanced parsing enabled so if a terminal
+	// still sends richer press/release metadata, releases can be discarded
+	// instead of looking like a second press.
+	screen, err := tcell.NewScreen(
+		tcell.OptKeyboardProtocol(tcell.LegacyKeyboard),
+		tcell.OptAdvancedKeys(true),
+	)
 	if err != nil {
 		fmt.Fprintln(stderr, "lsf:", err)
 		return 1

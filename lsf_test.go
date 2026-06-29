@@ -281,6 +281,43 @@ func TestKeyResolverCountsAndMultiKeyBindings(t *testing.T) {
 	}
 }
 
+func TestReadKeyNormalizesAdvancedPrintableRunes(t *testing.T) {
+	cases := []struct {
+		name string
+		ev   *tcell.EventKey
+		want string
+	}{
+		{
+			name: "plain vim down",
+			ev:   tcell.NewEventKeyEx(tcell.KeyRune, "j", tcell.ModNone, true, tcell.Key('j'), 1),
+			want: "j",
+		},
+		{
+			name: "shifted vim command keeps printed rune",
+			ev:   tcell.NewEventKeyEx(tcell.KeyRune, "G", tcell.ModShift, true, tcell.Key('g'), 1),
+			want: "G",
+		},
+		{
+			name: "advanced ctrl rune maps to ctrl binding",
+			ev:   tcell.NewEventKeyEx(tcell.KeyRune, "d", tcell.ModCtrl, true, tcell.Key('d'), 1),
+			want: "<c-d>",
+		},
+		{
+			name: "named shifted key keeps modifier",
+			ev:   tcell.NewEventKeyEx(tcell.KeyTab, "", tcell.ModShift, true, tcell.KeyTab, 1),
+			want: "<s-tab>",
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := readKey(tt.ev); got != tt.want {
+				t.Fatalf("readKey() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRunCommandHonorsCounts(t *testing.T) {
 	app := &app{nav: testNav(100)}
 	d := app.nav.currDir()
@@ -323,6 +360,7 @@ func TestTerminalNavigationKeypressesDoNotDoubleFire(t *testing.T) {
 	term := vt.NewMockTerm(vt.MockOptSize{X: width, Y: height})
 	screen, err := tcell.NewTerminfoScreenFromTty(term,
 		tcell.OptKeyboardProtocol(tcell.LegacyKeyboard),
+		tcell.OptAdvancedKeys(true),
 		tcell.OptNegotiation(false),
 	)
 	if err != nil {
@@ -364,6 +402,14 @@ func TestTerminalNavigationKeypressesDoNotDoubleFire(t *testing.T) {
 
 	term.SendRaw([]byte("k"))
 	waitForStatus(t, term, width, height, "1/20")
+
+	// Some terminals can leak richer keyboard-protocol press/release events
+	// even when lsf requests legacy reporting. A release must not act like a
+	// second press, or vim navigation skips rows.
+	term.SendRaw([]byte("\x1b[106;1u\x1b[106;1:3u"))
+	waitForStatus(t, term, width, height, "2/20")
+	time.Sleep(50 * time.Millisecond)
+	assertStatusSuffix(t, term, width, height, "2/20")
 
 	term.SendRaw([]byte(ctrlE))
 	waitForStatus(t, term, width, height, "2/20")
@@ -413,6 +459,17 @@ func waitForStatus(t *testing.T, term vt.MockTerm, width, height int, want strin
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("status line = %q, want suffix %q\nterminal:\n%s", got, want, terminalText(term, width, height))
+}
+
+func assertStatusSuffix(t *testing.T, term vt.MockTerm, width, height int, want string) {
+	t.Helper()
+	if err := term.Drain(); err != nil {
+		t.Fatal(err)
+	}
+	got := strings.TrimSpace(terminalLine(term, width, height-1))
+	if !strings.HasSuffix(got, want) {
+		t.Fatalf("status line = %q, want suffix %q\nterminal:\n%s", got, want, terminalText(term, width, height))
+	}
 }
 
 func terminalText(term vt.MockTerm, width, height int) string {

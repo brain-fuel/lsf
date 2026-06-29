@@ -180,8 +180,8 @@ func addKeyModifier(key string, mod tcell.ModMask) string {
 	}
 	switch {
 	case mod&tcell.ModCtrl != 0:
-		return wrapKeyModifier(key, "c")
-	case mod&tcell.ModShift != 0:
+		return wrapKeyModifier(strings.ToLower(key), "c")
+	case mod&tcell.ModShift != 0 && strings.HasPrefix(key, "<"):
 		return wrapKeyModifier(key, "s")
 	case mod&tcell.ModAlt != 0:
 		return wrapKeyModifier(key, "a")
